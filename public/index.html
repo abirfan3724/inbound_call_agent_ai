@@ -1,0 +1,147 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realezy Voice (Realtime)</title>
+  <style>
+    :root { --bg:#0b0f13; --card:#121820; --fg:#f4f6f8; --muted:#9aa4af; }
+    body{font:16px/1.4 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0}
+    .wrap{max-width:820px;margin:40px auto;padding:20px}
+    .card{background:var(--card);border-radius:16px;padding:20px;box-shadow:0 8px 28px rgba(0,0,0,.25)}
+    h1{font-size:22px;margin:0 0 10px}
+    p{color:var(--muted);margin:0 0 12px}
+    button{border:0;border-radius:12px;padding:12px 16px;background:#2f6feb;color:white;font-weight:600;cursor:pointer}
+    .bubble{padding:10px 14px;background:#19222e;border-radius:14px;margin:8px 0}
+    .sys{color:#c2d4ff}
+    #log{max-height:260px;overflow:auto;border-top:1px solid #1e2834;margin-top:12px;padding-top:10px}
+    audio{width:100%;margin-top:10px}
+  </style>
+  <meta http-equiv="origin-trial" content="">
+  <!-- If Chrome requires an origin trial for getUserMedia + opus/pcm for RTCPeerConnection, add token above if needed. -->
+  <meta http-equiv="Permissions-Policy" content="microphone=(self)">
+  <meta http-equiv="Feature-Policy" content="microphone 'self'">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Referrer-Policy" content="no-referrer">
+  <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+  <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Realezy Voice â€” One Click</h1>
+      <p>Click Start: it will brief the promotion, then answer strictly from the release notes. Speak in English.</p>
+      <button id="start">Start</button>
+      <div id="log"></div>
+      <audio id="speaker" autoplay></audio>
+    </div>
+  </div>
+
+<script>
+let pc, dc, localStream
+let DOCS = { promotion: '', release: '' }
+
+const log = (t, cls='') => {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + cls;
+  d.textContent = t;
+  document.getElementById('log').appendChild(d);
+  d.scrollIntoView({behavior:'smooth', block:'end'})
+}
+
+async function getSessionToken(){
+  const r = await fetch('/session',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ model:'gpt-realtime', voice:'alloy' })
+  })
+  const j = await r.json()
+  if(!j.client_secret) throw new Error('No client secret')
+  return j.client_secret
+}
+
+async function connect(){
+  const token = await getSessionToken()
+
+  pc = new RTCPeerConnection()
+  dc = pc.createDataChannel('oai-events')
+
+  dc.onmessage = (e)=>{
+    try {
+      const msg = JSON.parse(e.data)
+      if (msg.type === 'response.output_text.delta') {
+        // optional: stream partial text
+      }
+    } catch {}
+  }
+
+  pc.ontrack = (ev)=>{ document.getElementById('speaker').srcObject = ev.streams[0] }
+
+  localStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  for (const track of localStream.getAudioTracks()) pc.addTrack(track, localStream)
+
+  const offer = await pc.createOffer()
+  await pc.setLocalDescription(offer)
+
+  const sdpResp = await fetch('https://api.openai.com/v1/realtime?model=gpt-realtime', {
+    method:'POST',
+    headers:{
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/sdp'
+    },
+    body: offer.sdp
+  })
+  const answerSDP = await sdpResp.text()
+  await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP })
+
+  dc.onopen = ()=>{
+    log('Connected to gpt-realtime','sys')
+
+    const rules = 'Behavior: First, briefly present the PROMOTION. Then answer user questions strictly from the RELEASE document.'
+
+    // Add rules as system message
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: rules }] }
+    }))
+
+    // Provide RELEASE as the authoritative document
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: `RELEASE DOCUMENT\n-----\n${DOCS.release}\n-----\n` }]
+      }
+    }))
+
+    // Ask the model to brief the promotion, then wait for questions
+    dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        instructions: `Brief the promotion to the user in a friendly way: \n${DOCS.promotion}\n\nThen wait for their question and answer only from the RELEASE document. If not found there, say: "I don't know based on the release document."`
+      }
+    }))
+  }
+}
+
+async function start(){
+  try {
+    log('Fetching documents...','sys')
+    const d = await fetch('/content').then(r=>r.json())
+    DOCS = { promotion: d.promotion || '', release: d.release || '' }
+    if(!DOCS.promotion) log('Warning: promotion.txt is empty or missing','sys')
+    if(!DOCS.release) log('Warning: release.txt is empty or missing','sys')
+
+    log('Connecting...','sys')
+    await connect()
+  } catch (e) {
+    log('Start error: ' + (e?.message || e), 'sys')
+  }
+}
+
+document.getElementById('start').onclick = start
+</script>
+</body>
+</html>
+
