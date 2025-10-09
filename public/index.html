@@ -1,21 +1,27 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Realezy Voice (Realtime)</title>
   <style>
-    :root { --bg:#0b0f13; --card:#121820; --fg:#f4f6f8; --muted:#9aa4af; }
+    :root { --bg:#0b0f13; --card:#121820; --fg:#f4f6f8; --muted:#9aa4af; --accent:#2f6feb; }
     body{font:16px/1.4 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0}
-    .wrap{max-width:820px;margin:40px auto;padding:20px}
-    .card{background:var(--card);border-radius:16px;padding:20px;box-shadow:0 8px 28px rgba(0,0,0,.25)}
+    .wrap{max-width:860px;margin:40px auto;padding:20px}
+    .card{background:var(--card);border-radius:16px;padding:24px;box-shadow:0 8px 28px rgba(0,0,0,.25)}
     h1{font-size:22px;margin:0 0 10px}
-    p{color:var(--muted);margin:0 0 12px}
-    button{border:0;border-radius:12px;padding:12px 16px;background:#2f6feb;color:white;font-weight:600;cursor:pointer}
+    p{color:var(--muted);margin:0 0 16px}
+    button{border:0;border-radius:12px;padding:12px 16px;background:var(--accent);color:white;font-weight:600;cursor:pointer;transition:background .2s}
+    button:disabled{background:#334568;cursor:not-allowed}
     .bubble{padding:10px 14px;background:#19222e;border-radius:14px;margin:8px 0}
     .sys{color:#c2d4ff}
     #log{max-height:260px;overflow:auto;border-top:1px solid #1e2834;margin-top:12px;padding-top:10px}
     audio{width:100%;margin-top:10px}
+    .controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+    input[type="tel"],input[type="text"]{flex:1 1 220px;border-radius:12px;border:1px solid #1e2834;background:#0f141c;color:var(--fg);padding:12px 14px;font:inherit}
+    label{display:block;margin-bottom:6px;color:var(--muted);font-size:14px}
+    .row{margin-bottom:18px}
+    .inline-info{font-size:13px;color:#6e7a89;margin-top:4px}
   </style>
   <meta http-equiv="origin-trial" content="">
   <!-- If Chrome requires an origin trial for getUserMedia + opus/pcm for RTCPeerConnection, add token above if needed. -->
@@ -29,9 +35,22 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>Realezy Voice â€” One Click</h1>
-      <p>Click Start: it will brief the promotion, then answer strictly from the release notes. Speak in English.</p>
-      <button id="start">Start</button>
+      <h1>Realezy Voice � One Click</h1>
+      <p>Either place an outbound Twilio call or join the realtime assistant right in the browser.</p>
+
+      <div class="row">
+        <label for="call-number">Phone number to call</label>
+        <div class="controls">
+          <input id="call-number" type="tel" placeholder="e.g. +6591234567" autocomplete="tel" />
+          <button id="call-btn">Call Now</button>
+        </div>
+        <div class="inline-info">If left empty, the backend fallback `TWILIO_DEFAULT_TO` is used.</div>
+      </div>
+
+      <div class="row">
+        <button id="start">Start Browser Session</button>
+      </div>
+
       <div id="log"></div>
       <audio id="speaker" autoplay></audio>
     </div>
@@ -49,6 +68,33 @@ const log = (t, cls='') => {
   d.scrollIntoView({behavior:'smooth', block:'end'})
 }
 
+function setBusy(node, busy){
+  node.dataset.busy = busy ? '1' : ''
+  node.disabled = !!busy
+}
+
+async function callTwilio(){
+  const btn = document.getElementById('call-btn')
+  if (btn.dataset.busy === '1') return
+  setBusy(btn, true)
+  const to = document.getElementById('call-number').value.trim()
+  try {
+    log(`Dialling ${to || '(default number)' }�`, 'sys')
+    const resp = await fetch('/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(to ? { to } : {})
+    })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data?.details || data?.error || 'Call failed')
+    log(`Call started. SID: ${data.sid}`, 'sys')
+  } catch (err) {
+    log('Call error: ' + (err?.message || err), 'sys')
+  } finally {
+    setBusy(btn, false)
+  }
+}
+
 async function getSessionToken(){
   const r = await fetch('/session',{
     method:'POST',
@@ -56,7 +102,7 @@ async function getSessionToken(){
     body: JSON.stringify({ model:'gpt-realtime', voice:'alloy' })
   })
   const j = await r.json()
-  if(!j.client_secret) throw new Error('No client secret')
+  if(!j.client_secret) throw new Error(j?.error || 'No client secret')
   return j.client_secret
 }
 
@@ -126,6 +172,9 @@ async function connect(){
 }
 
 async function start(){
+  const btn = document.getElementById('start')
+  if (btn.dataset.busy === '1') return
+  setBusy(btn, true)
   try {
     log('Fetching documents...','sys')
     const d = await fetch('/content').then(r=>r.json())
@@ -137,11 +186,13 @@ async function start(){
     await connect()
   } catch (e) {
     log('Start error: ' + (e?.message || e), 'sys')
+  } finally {
+    setBusy(btn, false)
   }
 }
 
 document.getElementById('start').onclick = start
+document.getElementById('call-btn').onclick = callTwilio
 </script>
 </body>
 </html>
-
