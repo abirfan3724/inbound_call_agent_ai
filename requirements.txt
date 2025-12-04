@@ -4,3 +4,4 @@ httpx
 python-dotenv
 twilio
 python-multipart
+websockets>=12,<14
